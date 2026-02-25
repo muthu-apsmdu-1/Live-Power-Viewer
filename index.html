@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APS Power Monitor - Live Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; text-align: center; }
+        .container { max-width: 900px; margin: auto; }
+        h1 { color: #58a6ff; margin-bottom: 5px; }
+        .status-bar { font-weight: bold; padding: 10px; margin-bottom: 20px; border-radius: 8px; background: #161b22; border: 1px solid #30363d; display: inline-block; }
+        #status-text { color: #3fb950; } /* Default Green */
+        
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 25px; }
+        .card { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .card h3 { margin: 0; color: #8b949e; font-size: 0.9em; text-transform: uppercase; }
+        .val { font-size: 2em; font-weight: bold; margin: 10px 0; color: #3fb950; }
+        .unit { font-size: 0.5em; color: #8b949e; margin-left: 5px; }
+
+        table { width: 100%; border-collapse: collapse; background: #161b22; border-radius: 12px; overflow: hidden; border: 1px solid #30363d; font-size: 0.9em; }
+        th { background: #21262d; color: #58a6ff; padding: 12px; text-align: left; border-bottom: 1px solid #30363d; }
+        td { padding: 12px; border-bottom: 1px solid #21262d; text-align: left; font-family: 'Courier New', Courier, monospace; }
+        tr:hover { background: #1f242c; }
+        .hb-row { color: #8b949e; font-style: italic; } /* Heartbeat row style */
+        .latest-row { background: #23863633; font-weight: bold; } /* Highlight newest */
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>APS Power Services</h1>
+    <div class="status-bar">
+        SYSTEM STATUS: <span id="status-text">CONNECTING...</span>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <h3>Phase R</h3>
+            <div id="vR" class="val">--<span class="unit">V</span></div>
+            <div id="aR" class="val" style="font-size: 1.5em;">--<span class="unit">A</span></div>
+        </div>
+        <div class="card">
+            <h3>Phase Y</h3>
+            <div id="vY" class="val">--<span class="unit">V</span></div>
+            <div id="aY" class="val" style="font-size: 1.5em;">--<span class="unit">A</span></div>
+        </div>
+        <div class="card">
+            <h3>Phase B</h3>
+            <div id="vB" class="val">--<span class="unit">V</span></div>
+            <div id="aB" class="val" style="font-size: 1.5em;">--<span class="unit">A</span></div>
+        </div>
+    </div>
+
+    <h3>Last 1000 Events (Rolling Queue)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Event ID</th>
+                <th>V1, V2, V3, A1, A2, A3 - Timestamp</th>
+            </tr>
+        </thead>
+        <tbody id="event-log">
+            </tbody>
+    </table>
+</div>
+
+<script>
+    // Paste your exact Firebase URL here
+    const FB_URL = "https://live-power-viewer-default-rtdb.asia-southeast1.firebasedatabase.app/.json";
+
+    async function updateDashboard() {
+        try {
+            const response = await fetch(FB_URL);
+            const data = await response.json();
+            const events = data.Events;
+            
+            // 1. Update Latest Live Cards (from 00_Latest)
+            const latestStr = events["00_Latest"];
+            const [vPart, aTsPart] = latestStr.split(' - ');
+            const volts = vPart.split(', ');
+            const amps = aTsPart.split(', '); // Amps are at the start of second part
+
+            document.getElementById('vR').innerHTML = `${volts[0]}<span class="unit">V</span>`;
+            document.getElementById('vY').innerHTML = `${volts[1]}<span class="unit">V</span>`;
+            document.getElementById('vB').innerHTML = `${volts[2]}<span class="unit">V</span>`;
+            document.getElementById('aR').innerHTML = `${volts[3]}<span class="unit">A</span>`;
+            document.getElementById('aY').innerHTML = `${volts[4]}<span class="unit">A</span>`;
+            document.getElementById('aB').innerHTML = `${volts[5].split(' ')[0]}<span class="unit">A</span>`;
+
+            // 2. MCU Offline Detection (11-minute Watchdog)
+            const tsStr = aTsPart.split(' - ')[1] || latestStr.split(' - ')[1];
+            const parts = tsStr.split(':'); // YYYY:MM:DD:HH:MM:SS
+            const lastUpdate = new Date(parts[0], parts[1]-1, parts[2], parts[3], parts[4], parts[5]);
+            const diffMinutes = (new Date() - lastUpdate) / 1000 / 60;
+
+            const statusText = document.getElementById('status-text');
+            if (diffMinutes > 11) {
+                statusText.innerText = "OFFLINE (Last seen: " + Math.round(diffMinutes) + "m ago)";
+                statusText.style.color = "#f85149";
+            } else {
+                statusText.innerText = "MCU ONLINE";
+                statusText.style.color = "#3fb950";
+            }
+
+            // 3. Populate Table (Sorted by Key Descending)
+            const logBody = document.getElementById('event-log');
+            let tableContent = "";
+            
+            // Get all E_ keys and sort them so newest is at the top
+            const keys = Object.keys(events).filter(k => k.startsWith('E_')).sort().reverse();
+            
+            keys.forEach(key => {
+                const val = events[key];
+                const isHB = val.includes("(HB)");
+                tableContent += `<tr class="${isHB ? 'hb-row' : ''}">
+                    <td>${key}</td>
+                    <td>${val}</td>
+                </tr>`;
+            });
+            logBody.innerHTML = tableContent;
+
+        } catch (error) {
+            console.error("Error fetching data:", error);
+        }
+    }
+
+    // Refresh every 10 seconds
+    setInterval(updateDashboard, 10000);
+    updateDashboard();
+</script>
+
+</body>
+</html>
