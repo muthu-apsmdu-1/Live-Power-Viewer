@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APS Power Monitor - Live Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; text-align: center; }
+        .container { max-width: 900px; margin: auto; }
+        h1 { color: #58a6ff; margin-bottom: 5px; }
+        .status-bar { font-weight: bold; padding: 15px; margin-bottom: 20px; border-radius: 8px; background: #161b22; border: 1px solid #30363d; display: inline-block; min-width: 250px; }
+        #status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 10px; }
+        .pulse { animation: pulse-animation 2s infinite; }
+        @keyframes pulse-animation { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+        #update-time { font-size: 0.85em; color: #8b949e; display: block; margin-top: 5px; font-weight: normal; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-bottom: 25px; }
+        .card { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; }
+        .card h3 { margin: 0; color: #8b949e; font-size: 0.9em; text-transform: uppercase; }
+        .val-v { font-size: 2.2em; font-weight: bold; margin: 5px 0; color: #3fb950; }
+        .val-a { font-size: 1.6em; font-weight: bold; margin: 5px 0; color: #c9d1d9; }
+        .unit { font-size: 0.5em; color: #8b949e; margin-left: 5px; }
+        table { width: 100%; border-collapse: collapse; background: #161b22; border-radius: 12px; overflow: hidden; border: 1px solid #30363d; font-size: 0.85em; }
+        th { background: #21262d; color: #58a6ff; padding: 12px; text-align: left; }
+        td { padding: 10px; border-bottom: 1px solid #21262d; text-align: left; font-family: monospace; }
+        .hb-row { color: #8b949e !important; font-style: italic; opacity: 0.7; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>APS Power Services</h1>
+    <div class="status-bar">
+        <span id="status-dot"></span>
+        <span id="status-text">CONNECTING...</span>
+        <span id="update-time">Initializing...</span>
+    </div>
+
+    
+    <div class="grid">
+        <div class="card"><h3>PHASE R</h3><div id="vR" class="val-v">--V</div><div id="aR" class="val-a">--A</div></div>
+        <div class="card"><h3>PHASE Y</h3><div id="vY" class="val-v">--V</div><div id="aY" class="val-a">--A</div></div>
+        <div class="card"><h3>PHASE B</h3><div id="vB" class="val-v">--V</div><div id="aB" class="val-a">--A</div></div>
+    </div>
+
+    <h3>Event Log (Newest at Top)</h3>
+    <table>
+        <thead><tr><th>Slot</th><th>Data & Timestamp</th></tr></thead>
+        <tbody id="event-log"></tbody>
+    </table>
+</div>
+
+<script>
+    const FB_URL = "https://live-power-viewer-default-rtdb.asia-southeast1.firebasedatabase.app/.json";
+
+    async function updateDashboard() {
+        try {
+            const response = await fetch(FB_URL);
+            const data = await response.json();
+            const events = data.Events;
+            
+            // 1. Parse the "00_Latest" string
+            // Correct format: "V1, V2, V3, A1, A2, A3 - YYYY:MM:DD:HH:MM:SS"
+            const latestStr = events["00_Latest"];
+            const mainParts = latestStr.split(' - '); // [ "V1, V2, V3, A1, A2, A3", "Timestamp" ]
+            const readings = mainParts[0].split(', '); // [V1, V2, V3, A1, A2, A3]
+            const timestamp = mainParts[1];
+
+            // 2. Update Live Cards
+            document.getElementById('vR').innerHTML = `${readings[0]}<span class="unit">V</span>`;
+            document.getElementById('vY').innerHTML = `${readings[1]}<span class="unit">V</span>`;
+            document.getElementById('vB').innerHTML = `${readings[2]}<span class="unit">V</span>`;
+            document.getElementById('aR').innerHTML = `${readings[3]}<span class="unit">A</span>`;
+            document.getElementById('aY').innerHTML = `${readings[4]}<span class="unit">A</span>`;
+            document.getElementById('aB').innerHTML = `${readings[5]}<span class="unit">A</span>`;
+
+            // 3. Update Status and Time
+            document.getElementById('update-time').innerText = "Last Update: " + timestamp;
+            
+            const timeParts = timestamp.split(':');
+            const lastDate = new Date(timeParts[0], timeParts[1]-1, timeParts[2], timeParts[3], timeParts[4], timeParts[5]);
+            const diff = (new Date() - lastDate) / 1000 / 60;
+
+            const dot = document.getElementById('status-dot');
+            const txt = document.getElementById('status-text');
+            if (diff > 11) {
+                dot.style.backgroundColor = "red";
+                dot.classList.remove('pulse');
+                txt.innerText = "OFFLINE";
+                txt.style.color = "red";
+            } else {
+                dot.style.backgroundColor = "#3fb950";
+                dot.classList.add('pulse');
+                txt.innerText = "SYSTEM LIVE";
+                txt.style.color = "#3fb950";
+            }
+
+            // 4. Update Event Log Table
+            const logBody = document.getElementById('event-log');
+            let tableHTML = "";
+            const keys = Object.keys(events).filter(k => k.startsWith('E_')).sort().reverse();
+            
+            keys.forEach(k => {
+                const row = events[k];
+                const isHB = row.includes("(HB)");
+                tableHTML += `<tr class="${isHB ? 'hb-row' : ''}"><td>${k.split('_')[1]}</td><td>${row}</td></tr>`;
+            });
+            logBody.innerHTML = tableHTML;
+
+        } catch (e) { console.error("Update failed", e); }
+    }
+
+    setInterval(updateDashboard, 5000);
+    updateDashboard();
+</script>
+</body>
+</html>
