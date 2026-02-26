@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APS Power Monitor</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; text-align: center; }
+        .container { max-width: 500px; margin: auto; }
+        
+        /* Heading - Golden Yellow */
+        h1 { color: #FFD700; font-size: 1.5em; margin-bottom: 5px; font-weight: normal; letter-spacing: 1px; }
+        
+        /* Time/Offline Row */
+        .time-box { background: #161b22; color: #2ecc71; font-family: monospace; font-size: 1.3em; padding: 10px 20px; border-radius: 4px; display: inline-block; margin-bottom: 25px; border: 1px solid #30363d; min-width: 250px; }
+        
+        #status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; vertical-align: middle; }
+        .pulse { animation: pulse-animation 2s infinite; }
+        @keyframes pulse-animation { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+
+        /* Symmetrical Phase Rows */
+        .phase-row { 
+            display: flex; align-items: center; justify-content: space-between; background: #1c2128; 
+            margin-bottom: 15px; border-radius: 12px; padding: 18px 25px; position: relative; 
+            overflow: hidden; border: 1px solid #30363d; 
+        }
+        .phase-row::before, .phase-row::after { content: ''; position: absolute; top: 0; bottom: 0; width: 10px; }
+        .phase-row::before { left: 0; }
+        .phase-row::after { right: 0; }
+
+        .phase-r::before, .phase-r::after { background: #e74c3c; }
+        .phase-y::before, .phase-y::after { background: #ECE115; }
+        .phase-b::before, .phase-b::after { background: #3498db; }
+        
+        .phase-label { font-weight: bold; font-size: 1.2em; letter-spacing: 1px; }
+        .phase-r .phase-label { color: #e74c3c; }
+        .phase-y .phase-label { color: #ECE115; }
+        .phase-b .phase-label { color: #3498db; }
+
+        .readings { display: flex; align-items: baseline; gap: 20px; }
+        .val { font-size: 1.6em; font-weight: bold; color: white; }
+        .unit { font-size: 0.6em; color: #8b949e; margin-left: 3px; font-weight: normal; }
+
+        .log-section { margin-top: 35px; border-top: 1px solid #30363d; padding-top: 20px; }
+        .log-header { font-size: 0.8em; color: #8b949e; margin-bottom: 12px; text-transform: uppercase; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85em; background: #161b22; border-radius: 8px; overflow: hidden; }
+        td { padding: 12px; border-bottom: 1px solid #21262d; text-align: left; font-family: monospace; }
+        .slot { color: #58a6ff; font-weight: bold; width: 45px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>APS Power Monitor</h1>
+    <div id="status-area">
+        <span id="status-dot"></span>
+        <div class="time-box" id="display-text">INITIALIZING...</div>
+    </div>
+
+    <div class="phase-row phase-r">
+        <span class="phase-label">PHASE R</span>
+        <div class="readings">
+            <div><span class="val" id="vR">--</span><span class="unit">V</span></div>
+            <div><span class="val" id="aR">--</span><span class="unit">A</span></div>
+        </div>
+    </div>
+
+    <div class="phase-row phase-y">
+        <span class="phase-label">PHASE Y</span>
+        <div class="readings">
+            <div><span class="val" id="vY">--</span><span class="unit">V</span></div>
+            <div><span class="val" id="aY">--</span><span class="unit">A</span></div>
+        </div>
+    </div>
+
+    <div class="phase-row phase-b">
+        <span class="phase-label">PHASE B</span>
+        <div class="readings">
+            <div><span class="val" id="vB">--</span><span class="unit">V</span></div>
+            <div><span class="val" id="aB">--</span><span class="unit">A</span></div>
+        </div>
+    </div>
+
+    <div class="log-section">
+        <div class="log-header">Recent Events</div>
+        <table>
+            <tbody id="event-log">
+                <tr><td colspan="2" style="text-align:center; color:#8b949e;">Waiting for MCU...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const FB_URL = "https://live-power-viewer-default-rtdb.asia-southeast1.firebasedatabase.app/.json";
+
+    async function updateDashboard() {
+        try {
+            const response = await fetch(FB_URL);
+            const data = await response.json();
+            const events = data.Power;
+            
+            // 1. Time & Date Parsing
+            const dTime = events["D_Time"]; // Format: "YYYY:MM:DD, HH:MM:SS"
+            const parts = dTime.split(', ');
+            const dateStr = parts[0];
+            const timeStr = parts[1];
+
+            // 2. Offline Logic Calculation (60 seconds)
+            const d = dateStr.split(':');
+            const t = timeStr.split(':');
+            const lastUpdate = new Date(d[0], d[1]-1, d[2], t[0], t[1], t[2]);
+            const diffSeconds = (new Date() - lastUpdate) / 1000;
+
+            const dot = document.getElementById('status-dot');
+            const display = document.getElementById('display-text');
+
+            if (diffSeconds > 60 || isNaN(diffSeconds)) {
+                // OFFLINE STATE
+                dot.style.backgroundColor = "#e74c3c";
+                dot.classList.remove('pulse');
+                display.innerText = "OFFLINE";
+                display.style.color = "#e74c3c";
+                display.style.fontWeight = "bold";
+            } else {
+                // ONLINE STATE
+                dot.style.backgroundColor = "#2ecc71";
+                dot.classList.add('pulse');
+                display.innerText = dateStr + " | " + timeStr;
+                display.style.color = "#2ecc71";
+                display.style.fontWeight = "normal";
+            }
+
+            // 3. Update Phase Readings
+            const r = events["A_Phase R"].split(', ');
+            const y = events["B_Phase Y"].split(', ');
+            const b = events["C_Phase B"].split(', ');
+
+            document.getElementById('vR').innerText = r[0];
+            document.getElementById('aR').innerText = r[1];
+            document.getElementById('vY').innerText = y[0];
+            document.getElementById('aY').innerText = y[1];
+            document.getElementById('vB').innerText = b[0];
+            document.getElementById('aB').innerText = b[1];
+
+            // 4. Update Event History
+            const logBody = document.getElementById('event-log');
+            let tableHTML = "";
+            const keys = Object.keys(events).filter(k => k.startsWith('E_')).sort(); 
+            
+            keys.forEach(k => {
+                tableHTML += `<tr><td class="slot">${k.split('_')[1]}</td><td>${events[k]}</td></tr>`;
+            });
+            logBody.innerHTML = tableHTML;
+
+        } catch (e) { 
+            console.error("Sync Error:", e);
+            document.getElementById('display-text').innerText = "CONNECTION LOST";
+            document.getElementById('display-text').style.color = "#e74c3c";
+        }
+    }
+
+    setInterval(updateDashboard, 5000);
+    updateDashboard();
+</script>
+</body>
+</html>
